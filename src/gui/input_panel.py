@@ -19,9 +19,10 @@ class AIWorker(QThread):
     error = Signal(str)         # Error message
     progress = Signal(str)      # Status text
 
-    def __init__(self, description: str, parent=None):
+    def __init__(self, description: str, current_spec: CircuitSpec | None = None, parent=None):
         super().__init__(parent)
         self._description = description
+        self._current_spec = current_spec
 
     def run(self):
         try:
@@ -31,7 +32,7 @@ class AIWorker(QThread):
 
             client = AIClient()
             self.progress.emit(tr("progress_designing"))
-            spec = client.generate_circuit(self._description)
+            spec = client.generate_circuit(self._description, self._current_spec)
 
             self.progress.emit(tr("progress_validating"))
             validated, warnings = validate_circuit(spec)
@@ -58,11 +59,17 @@ class InputPanel(QWidget):
         ("tpl_sensor", "tpl_sensor_desc"),
         ("tpl_motor", "tpl_motor_desc"),
         ("tpl_usbc", "tpl_usbc_desc"),
+        ("tpl_esp32", "tpl_esp32_desc"),
+        ("tpl_timer", "tpl_timer_desc"),
+        ("tpl_amp", "tpl_amp_desc"),
+        ("tpl_pdu", "tpl_pdu_desc"),
+        ("tpl_filter", "tpl_filter_desc"),
     ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._worker: AIWorker | None = None
+        self._current_spec: CircuitSpec | None = None
         self._setup_ui()
         self._retranslate()
         Translator.instance().language_changed.connect(self._retranslate)
@@ -82,14 +89,22 @@ class InputPanel(QWidget):
         self._subtitle.setWordWrap(True)
         layout.addWidget(self._subtitle)
 
+        # Mode Selector
+        self._mode_combo = QComboBox()
+        self._mode_combo.addItems([tr("mode_new"), tr("mode_edit")])
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        layout.addWidget(self._mode_combo)
+
         # Template selector
-        tmpl_layout = QHBoxLayout()
+        self._tmpl_container = QWidget()
+        tmpl_layout = QHBoxLayout(self._tmpl_container)
+        tmpl_layout.setContentsMargins(0, 0, 0, 0)
         self._tmpl_label = QLabel()
         self._template_combo = QComboBox()
         self._template_combo.currentIndexChanged.connect(self._on_template_selected)
         tmpl_layout.addWidget(self._tmpl_label)
         tmpl_layout.addWidget(self._template_combo, 1)
-        layout.addLayout(tmpl_layout)
+        layout.addWidget(self._tmpl_container)
 
         # Text input
         self._text_edit = QTextEdit()
@@ -128,6 +143,17 @@ class InputPanel(QWidget):
 
     # ------------------------------------------------------------------
 
+    def _on_mode_changed(self, index: int):
+        is_edit = (index == 1)
+        self._tmpl_container.setVisible(not is_edit)
+        if is_edit:
+            self._text_edit.setPlaceholderText(tr("placeholder_edit"))
+        else:
+            self._text_edit.setPlaceholderText(tr("placeholder_circuit"))
+        
+        # Update button text
+        self._generate_btn.setText(tr("button_modify") if is_edit else tr("button_design"))
+
     def _on_template_selected(self, index: int):
         if index <= 0 or index >= len(self._TEMPLATE_KEYS):
             return
@@ -149,7 +175,11 @@ class InputPanel(QWidget):
         self._warnings_label.setVisible(False)
         self._warnings_label.setText("")
 
-        self._worker = AIWorker(description)
+        # Decide if we are editing or creating new
+        is_edit = self._mode_combo.currentIndex() == 1
+        spec_to_use = self._current_spec if is_edit else None
+
+        self._worker = AIWorker(description, spec_to_use)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
         self._worker.progress.connect(self._on_progress)
@@ -157,6 +187,7 @@ class InputPanel(QWidget):
 
     def _on_finished(self, spec, warnings):
         self._set_busy(False)
+        self._current_spec = spec
         self._status_label.setText(
             tr("success_circuit", name=spec.name,
                components=spec.component_count, nets=spec.net_count)
@@ -216,9 +247,18 @@ class InputPanel(QWidget):
         self._text_edit.setPlaceholderText(tr("placeholder_circuit"))
         self._generate_btn.setText(tr("button_design"))
         self._clear_btn.setText(tr("button_clear"))
+        
+        # Mode combo
+        self._mode_combo.blockSignals(True)
+        self._mode_combo.clear()
+        self._mode_combo.addItem(tr("mode_new"))
+        self._mode_combo.addItem(tr("mode_edit"))
+        self._mode_combo.blockSignals(False)
+        
         # Rebuild template combo
         self._template_combo.blockSignals(True)
         self._template_combo.clear()
         for name_key, _ in self._TEMPLATE_KEYS:
             self._template_combo.addItem(tr(name_key))
         self._template_combo.blockSignals(False)
+

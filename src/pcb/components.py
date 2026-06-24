@@ -12,6 +12,8 @@ from typing import Optional
 
 from src.config import DATA_DIR
 from src.utils.logger import get_logger
+from src.vendor import find_kicad
+from src.pcb.footprint_parser import parse_footprint
 
 log = get_logger("pcb.components")
 
@@ -125,8 +127,66 @@ class ComponentDB:
             self._conn = None
 
     # queries ----------------------------------------------------------------
+    
+    def sync_with_kicad(self) -> int:
+        """Scan KiCad footprint libraries and import them into the database.
+        Returns the number of new footprints added.
+        """
+        assert self._conn is not None
+        kicad_dir = find_kicad()
+        if not kicad_dir:
+            log.error("KiCad installation not found. Cannot sync libraries.")
+            return 0
+
+        # Search in KiCad share directory
+        search_paths = [Path(kicad_dir) / "share" / "kicad" / "footprints"]
+        
+        # Add user config paths
+        import os
+        search_paths.append(Path(os.getenv("APPDATA", "")) / "kicad" / "footprints")
+        search_paths.append(Path.home() / ".kicad" / "footprints")
+
+        added_count = 0
+        for root_path in search_paths:
+            if not root_path.exists():
+                continue
+            
+            # Scan for .pretty folders
+            for pretty_dir in root_path.glob("*.pretty"):
+                lib_name = pretty_dir.name.replace(".pretty", "")
+                
+                # Scan for .kicad_mod files
+                for mod_file in pretty_dir.glob("*.kicad_mod"):
+                    fp = parse_footprint(mod_file)
+                    if not fp:
+                        continue
+                    
+                    footprint_str = f"{lib_name}:{fp.name}"
+                    
+                    # Avoid duplicates
+                    cur = self._conn.execute(
+                        "SELECT id FROM components WHERE footprint = ?", (footprint_str,)
+                    )
+                    if cur.fetchone():
+                        continue
+                    
+                    # Infer category from lib_name or a mapping
+                    category = lib_name.lower()
+                    
+                    # Simplified entry
+                    self._conn.execute(
+                        "INSERT INTO components (ref_prefix, category, value, package, footprint, pin_count) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        ("?", category, "imported", fp.name, footprint_str, len(fp.pads))
+                    )
+                    added_count += 1
+        
+        self._conn.commit()
+        log.info("Synced with KiCad: added %d footprints.", added_count)
+        return added_count
 
     def search(
+
         self,
         *,
         category: str = "",

@@ -18,6 +18,8 @@ from src.ai.schemas import (
     PinRef,
 )
 from src.pcb.components import ComponentDB
+from src.pcb.footprint_parser import parse_footprint
+from src.vendor import find_footprint_file
 from src.utils.logger import get_logger
 
 log = get_logger("pcb.generator")
@@ -91,6 +93,13 @@ class Board:
     traces: list[TraceSegment] = field(default_factory=list)
     vias: list[Via] = field(default_factory=list)
     constraints: DesignConstraints = field(default_factory=DesignConstraints)
+    # New: Metal enclosure properties
+    enclosure: dict = field(default_factory=lambda: {
+        "material": "aluminum",
+        "thickness_mm": 1.0,
+        "wall_height_mm": 10.0,
+        "bend_radius_mm": 0.5,
+    })
 
     def get_all_pads(self) -> list[Pad]:
         pads = []
@@ -176,65 +185,92 @@ class PCBGenerator:
     # ------------------------------------------------------------------
 
     def _place_component(self, comp: ComponentSpec) -> PlacedComponent:
-        """Create a PlacedComponent with pads from a ComponentSpec."""
+        """Create a PlacedComponent with pads from a ComponentSpec.
+        Tries to load a real KiCad footprint if available; falls back to heuristics.
+        """
+        fp_id = self._resolve_footprint(comp)
         placed = PlacedComponent(
             ref=comp.ref,
             value=comp.value,
-            footprint=self._resolve_footprint(comp),
+            footprint=fp_id,
             x_mm=comp.x_mm,
             y_mm=comp.y_mm,
             rotation_deg=comp.rotation_deg,
             layer=comp.layer.value,
         )
 
-        # Generate pads from pins — auto-generate defaults if pins list is empty
-        if not comp.pins:
-            from src.ai.schemas import PinSpec
-            comp.pins = [PinSpec(number="1", name="1"), PinSpec(number="2", name="2")]
-            log.warning("Component '%s' has no pins — generated 2 default pins", comp.ref)
+        # Try to load real footprint
+        fp_file = find_footprint_file(fp_id)
+        real_fp = parse_footprint(fp_file) if fp_file else None
 
-        pin_count = len(comp.pins)
-        pad_spacing = 5.08  # mm (standard 200mil pitch for THT)
+        if real_fp:
+            log.info("Using real footprint for %s: %s", comp.ref, fp_id)
+            # Rotate and shift pads from the footprint
+            rad = math.radians(comp.rotation_deg)
+            cos_a = math.cos(rad)
+            sin_a = math.sin(rad)
 
-        if pin_count <= 3:
-            # Inline pads for small components (resistors, caps, LEDs, etc.)
-            for i, pin in enumerate(comp.pins):
+            for p in real_fp.pads:
+                # Rotate relative to (0,0) and then translate to comp center
+                rx = p.x_mm * cos_a - p.y_mm * sin_a
+                ry = p.x_mm * sin_a + p.y_mm * cos_a
+                
                 placed.pads.append(Pad(
-                    number=pin.number,
+                    number=p.number,
                     component_ref=comp.ref,
-                    x_mm=comp.x_mm + (i - (pin_count - 1) / 2) * pad_spacing,
-                    y_mm=comp.y_mm,
-                    width_mm=1.6,
-                    height_mm=1.6,
-                    shape="circle",
-                    drill_mm=0.8,
+                    x_mm=comp.x_mm + rx,
+                    y_mm=comp.y_mm + ry,
+                    width_mm=p.width_mm,
+                    height_mm=p.height_mm,
+                    shape=p.shape,
+                    drill_mm=p.drill_mm,
                 ))
         else:
-            # Dual-row (DIP/SOIC style) or quad (QFP style)
-            half = pin_count // 2
-            pin_pitch = 2.54   # mm between pins in same row
-            row_spacing = 3.81  # mm from center to each row (7.62mm DIP width)
-            for i, pin in enumerate(comp.pins):
-                if i < half:
-                    # Left side
-                    px = comp.x_mm - row_spacing
-                    py = comp.y_mm + (i - (half - 1) / 2) * pin_pitch
-                else:
-                    # Right side
-                    j = i - half
-                    px = comp.x_mm + row_spacing
-                    py = comp.y_mm + ((half - 1) / 2 - j) * pin_pitch
+            # FALLBACK: Heuristic pad placement
+            log.warning("Footprint %s not found for %s — using heuristics", fp_id, comp.ref)
+            if not comp.pins:
+                from src.ai.schemas import PinSpec
+                comp.pins = [PinSpec(number="1", name="1"), PinSpec(number="2", name="2")]
+                log.warning("Component '%s' has no pins — generated 2 default pins", comp.ref)
 
-                placed.pads.append(Pad(
-                    number=pin.number,
-                    component_ref=comp.ref,
-                    x_mm=px,
-                    y_mm=py,
-                    width_mm=1.6,
-                    height_mm=1.6,
-                    shape="circle",
-                    drill_mm=0.8,
-                ))
+            pin_count = len(comp.pins)
+            pad_spacing = 5.08 
+
+            if pin_count <= 3:
+                for i, pin in enumerate(comp.pins):
+                    placed.pads.append(Pad(
+                        number=pin.number,
+                        component_ref=comp.ref,
+                        x_mm=comp.x_mm + (i - (pin_count - 1) / 2) * pad_spacing,
+                        y_mm=comp.y_mm,
+                        width_mm=1.6,
+                        height_mm=1.6,
+                        shape="circle",
+                        drill_mm=0.8,
+                    ))
+            else:
+                half = pin_count // 2
+                pin_pitch = 2.54
+                row_spacing = 3.81
+                for i, pin in enumerate(comp.pins):
+                    if i < half:
+                        px = comp.x_mm - row_spacing
+                        py = comp.y_mm + (i - (half - 1) / 2) * pin_pitch
+                    else:
+                        j = i - half
+                        px = comp.x_mm + row_spacing
+                        py = comp.y_mm + ((half - 1) / 2 - j) * pin_pitch
+
+                    placed.pads.append(Pad(
+                        number=pin.number,
+                        component_ref=comp.ref,
+                        x_mm=px,
+                        y_mm=py,
+                        width_mm=1.6,
+                        height_mm=1.6,
+                        shape="circle",
+                        drill_mm=0.8,
+                    ))
 
         return placed
 

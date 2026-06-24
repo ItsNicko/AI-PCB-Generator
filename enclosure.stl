@@ -1,0 +1,37 @@
+solid enclosure
+  facet normal 0 0 1
+    outer loop
+      vertex -3.34 -0.8000000000000007 0.0
+      vertex 98.34 -0.8000000000000007 0.0
+      vertex 98.34 95.8 0.0
+    endloop
+  endfacet
+  facet normal 0 0 1
+    outer loop
+      vertex -3.34 -0.8000000000000007 10.0
+      vertex 98.34 -0.8000000000000007 10.0
+      vertex 98.34 0.1999999999999993 10.0
+    endloop
+  endfacet
+  facet normal 0 0 1
+    outer loop
+      vertex -3.34 85.8 10.0
+      vertex 98.34 85.8 10.0
+      vertex 98.34 86.8 10.0
+    endloop
+  endfacet
+  facet normal 0 0 1
+    outer loop
+      vertex -3.34 -0.8000000000000007 10.0
+      vertex -2.34 -0.8000000000000007 10.0
+      vertex -2.34 95.8 10.0
+    endloop
+  endfacet
+  facet normal 0 0 1
+    outer loop
+      vertex 97.34 -0.8000000000000007 10.0
+      vertex 98.34 -0.8000000000000007 10.0
+      vertex 98.34 95.8 10.0
+    endloop
+  endfacet
+endsolid enclosure

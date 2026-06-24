@@ -86,6 +86,14 @@ class MainWindow(QMainWindow):
         self._act_export.triggered.connect(self._export)
         self._file_menu.addAction(self._act_export)
 
+        self._act_export_3d = QAction("Export 3D Model", self)
+        self._act_export_3d.triggered.connect(self._export_3d_model)
+        self._file_menu.addAction(self._act_export_3d)
+
+        self._act_export_enclosure = QAction("Export Enclosure", self)
+        self._act_export_enclosure.triggered.connect(self._export_enclosure)
+        self._file_menu.addAction(self._act_export_enclosure)
+
         self._act_manufacture = QAction("", self)
         self._act_manufacture.setShortcut(QKeySequence("Ctrl+M"))
         self._act_manufacture.triggered.connect(self._manufacture)
@@ -154,6 +162,12 @@ class MainWindow(QMainWindow):
         self._tb_save = self._toolbar.addAction("")
         self._tb_save.triggered.connect(self._save_project)
         self._toolbar.addSeparator()
+        
+        # New Optimization Tool
+        self._tb_optimize = self._toolbar.addAction("✨ Optimize")
+        self._tb_optimize.triggered.connect(self._optimize_traces)
+        
+        self._toolbar.addSeparator()
         self._tb_export = self._toolbar.addAction("")
         self._tb_export.triggered.connect(self._export)
         self._tb_manufacture = self._toolbar.addAction("")
@@ -165,6 +179,49 @@ class MainWindow(QMainWindow):
         self._tb_wire = self._toolbar.addAction("")
         self._tb_wire.setCheckable(True)
         self._tb_wire.toggled.connect(self._toggle_wire_mode)
+
+    def _optimize_traces(self):
+        """Run the trace optimizer on the current board."""
+        if not self._board:
+            QMessageBox.warning(self, "No Board", "Generate a circuit first before optimizing.")
+            return
+        
+        from src.pcb.optimizer import TraceOptimizer
+        optimizer = TraceOptimizer(self._board)
+        self._board = optimizer.optimize()
+        
+        # Update views
+        self._pcb_view.load_board(self._board)
+        self._view_3d.load_board(self._board)
+        self._set_status("Traces optimized successfully.")
+
+    def _export_3d_model(self):
+        """Export the current PCB as a 3D model."""
+        if not self._board:
+            QMessageBox.warning(self, "No Board", "Generate a circuit first.")
+            return
+        
+        from src.pcb.model3d import Model3DGenerator
+        gen = Model3DGenerator(self._board)
+        
+        path, _ = QFileDialog.getSaveFileName(self, "Export 3D Model", "pcb_model.stl", "STL Files (*.stl)")
+        if path:
+            gen.generate_stl(Path(path))
+            QMessageBox.information(self, "Success", f"3D Model exported to {path}")
+
+    def _export_enclosure(self):
+        """Export the bended aluminum enclosure."""
+        if not self._board:
+            QMessageBox.warning(self, "No Board", "Generate a circuit first.")
+            return
+            
+        from src.pcb.model3d import Model3DGenerator
+        gen = Model3DGenerator(self._board)
+        
+        path, _ = QFileDialog.getSaveFileName(self, "Export Enclosure", "enclosure.stl", "STL Files (*.stl)")
+        if path:
+            gen.generate_enclosure(Path(path))
+            QMessageBox.information(self, "Success", f"Enclosure model exported to {path}")
 
     def _setup_central(self):
         central = QWidget()

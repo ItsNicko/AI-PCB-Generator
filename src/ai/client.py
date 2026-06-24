@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ast
 from typing import AsyncIterator
 
 from openai import OpenAI
@@ -43,16 +44,18 @@ class AIClient:
     # Public API
     # ------------------------------------------------------------------
 
-    def generate_circuit(self, description: str) -> CircuitSpec:
+    def generate_circuit(self, description: str, current_spec: CircuitSpec | None = None) -> CircuitSpec:
         """Send a natural-language description and return a validated CircuitSpec.
-
-        Raises AIClientError on API or validation failures.
+        
+        If current_spec is provided, the AI will iterate on the existing design.
         """
         if not description or not description.strip():
             raise AIClientError("Circuit description cannot be empty.")
 
-        messages = build_messages(description.strip())
-        log.info("Generating circuit for: %s", description[:120])
+        messages = build_messages(description.strip(), current_spec)
+        
+        mode_label = "Editing" if current_spec else "Generating"
+        log.info("%s circuit for: %s", mode_label, description[:120])
 
         try:
             response = self._client.chat.completions.create(
@@ -79,32 +82,49 @@ class AIClient:
 
     def _parse_response(self, raw: str) -> CircuitSpec:
         """Parse raw JSON string into a validated CircuitSpec."""
-        # Strip potential markdown fences
         text = raw.strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
-            # Remove first and last ``` lines
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            text = "\n".join(lines)
 
+        # Extract JSON object by finding the outermost braces
+        start_idx = text.find("{")
+        end_idx = text.rfind("}")
+
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            text = text[start_idx : end_idx + 1]
+
+        # Try multiple parsing strategies
+        # 1. Standard JSON with relaxed control character handling
         try:
-            data = json.loads(text)
-        except json.JSONDecodeError as exc:
-            log.error("Failed to parse AI JSON: %s", exc)
-            raise AIClientError(f"AI response is not valid JSON: {exc}") from exc
+            data = json.loads(text, strict=False)
+            return CircuitSpec.model_validate(data)
+        except (json.JSONDecodeError, ValidationError):
+            pass
 
+        # 2. Fallback to ast.literal_eval for non-standard JSON (e.g. single quotes, trailing commas)
         try:
-            spec = CircuitSpec.model_validate(data)
-        except ValidationError as exc:
-            log.error("Circuit spec validation failed: %s", exc)
-            raise AIClientError(
-                f"AI response does not match expected schema:\n{exc}"
-            ) from exc
+            # Note: ast.literal_eval does not handle 'null', 'true', 'false'
+            # We try it as-is first for single-quote/trailing-comma cases
+            data = ast.literal_eval(text)
+            if isinstance(data, dict):
+                return CircuitSpec.model_validate(data)
+        except (ValueError, SyntaxError, ValidationError):
+            pass
 
-        log.info(
-            "Circuit parsed: %s — %d components, %d nets",
-            spec.name,
-            spec.component_count,
-            spec.net_count,
-        )
-        return spec
+        # 3. Attempt a "pythonized" parse for cases with trailing commas AND null/true/false
+        try:
+            # This is risky but can save some AI responses
+            # Replace common JSON keywords with Python equivalents
+            # Use a simple approach that avoids replacing text inside quotes if possible
+            # but for a fallback, we take the risk.
+            import re
+            pythonized = re.sub(r'\bnull\b', 'None', text)
+            pythonized = re.sub(r'\btrue\b', 'True', pythonized)
+            pythonized = re.sub(r'\bfalse\b', 'False', pythonized)
+            data = ast.literal_eval(pythonized)
+            if isinstance(data, dict):
+                return CircuitSpec.model_validate(data)
+        except (ValueError, SyntaxError, ValidationError):
+            pass
+
+        # If all else fails, log the failing text for debugging and raise
+        log.error("All AI JSON parsing strategies failed. Raw text: %s", text)
+        raise AIClientError(f"AI response is not valid JSON and could not be recovered: {text[:100]}...")

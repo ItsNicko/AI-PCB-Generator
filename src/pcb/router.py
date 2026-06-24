@@ -12,6 +12,7 @@ import heapq
 import math
 import subprocess
 import tempfile
+import re
 from pathlib import Path
 
 from src.pcb.generator import Board, TraceSegment, Via
@@ -245,163 +246,185 @@ class FreeroutingRouter:
 # ======================================================================
 
 def _maze_route(board: Board) -> Board:
-    """Route all nets using an A* grid-based maze router.
-
-    Creates a uniform grid over the board area, marks pad/via obstacles,
-    and routes each net point-to-point using A* search. Already-routed
-    traces become obstacles for subsequent nets.
+    """Route all nets using a 3D A* grid-based maze router.
+    
+    Creates a 3D grid (layer, col, row) over the board area. Pads/vias are obstacles.
+    Moving between layers inserts a via.
     """
     o = board.outline
     clearance = board.constraints.clearance_mm
     trace_w = board.constraints.trace_width_mm
+    layers_count = board.layers
 
-    # Grid resolution — balance between quality and performance
+    # Grid resolution
     grid_step = max(trace_w, clearance, 0.25)
 
     # Grid dimensions
     cols = max(1, int(math.ceil(o.width_mm / grid_step)))
     rows = max(1, int(math.ceil(o.height_mm / grid_step)))
 
-    # Clamp grid to reasonable size to prevent memory issues
-    MAX_CELLS = 500_000
-    if cols * rows > MAX_CELLS:
-        scale = math.sqrt(MAX_CELLS / (cols * rows))
+    # Clamp grid to prevent memory issues (per layer)
+    MAX_CELLS_PER_LAYER = 200_000
+    if cols * rows > MAX_CELLS_PER_LAYER:
+        scale = math.sqrt(MAX_CELLS_PER_LAYER / (cols * rows))
         grid_step = grid_step / scale
         cols = max(1, int(math.ceil(o.width_mm / grid_step)))
         rows = max(1, int(math.ceil(o.height_mm / grid_step)))
 
-    log.info("A* router: grid %d×%d (step=%.3fmm)", cols, rows, grid_step)
+    log.info("A* router: grid %dx%dx%d (step=%.3fmm)", layers_count, cols, rows, grid_step)
 
-    # Obstacle grid (False = free, True = blocked)
-    blocked: set[tuple[int, int]] = set()
+    # Obstacle grid (layer, col, row)
+    blocked: set[tuple[int, int, int]] = set()
 
-    def _mm_to_grid(x_mm: float, y_mm: float) -> tuple[int, int]:
+    def _mm_to_grid(layer_name: str, x_mm: float, y_mm: float) -> tuple[int, int, int]:
+        # Map layer name to index (0=Top, layers_count-1=Bottom)
+        if layer_name == "F.Cu":
+            l_idx = 0
+        elif layer_name == "B.Cu":
+            l_idx = layers_count - 1
+        else:
+            # Handle In1.Cu, In2.Cu etc.
+            match = re.search(r'In(\d+)\.Cu', layer_name)
+            l_idx = int(match.group(1)) if match else 0
+            
         gc = int(round((x_mm - o.x_mm) / grid_step))
         gr = int(round((y_mm - o.y_mm) / grid_step))
-        return (max(0, min(gc, cols - 1)), max(0, min(gr, rows - 1)))
+        return (l_idx, max(0, min(gc, cols - 1)), max(0, min(gr, rows - 1)))
 
-    def _grid_to_mm(gc: int, gr: int) -> tuple[float, float]:
+    def _grid_to_mm(l_idx: int, gc: int, gr: int) -> tuple[float, float]:
         return (o.x_mm + gc * grid_step, o.y_mm + gr * grid_step)
 
-    def _mark_blocked(cx: float, cy: float, radius_mm: float) -> None:
-        """Block grid cells around a coordinate."""
+    def _mark_blocked(l_idx: int, cx: float, cy: float, radius_mm: float) -> None:
         r_cells = int(math.ceil(radius_mm / grid_step))
-        gc, gr = _mm_to_grid(cx, cy)
+        # Need to find grid coords for the specific layer provided
+        # Temporarily use a dummy layer name for _mm_to_grid or just calculate
+        gc = int(round((cx - o.x_mm) / grid_step))
+        gr = int(round((cy - o.y_mm) / grid_step))
         for di in range(-r_cells, r_cells + 1):
             for dj in range(-r_cells, r_cells + 1):
                 ni, nj = gc + di, gr + dj
                 if 0 <= ni < cols and 0 <= nj < rows:
-                    blocked.add((ni, nj))
+                    blocked.add((l_idx, ni, nj))
 
-    # Mark component pad obstacles (pads that aren't being routed)
+    # Mark component pad obstacles
     pad_radius = max(0.4, trace_w)
     for comp in board.components:
         for pad in comp.pads:
-            _mark_blocked(pad.x_mm, pad.y_mm, pad_radius)
+            # Find layer index for the pad
+            l_idx = 0 if "F.Cu" in pad.net_name else (layers_count - 1 if "B.Cu" in pad.net_name else 0) # Simplification
+            # Better: use the component's layer
+            comp_l_idx = 0 if comp.layer == "F.Cu" else (layers_count - 1 if comp.layer == "B.Cu" else 0)
+            _mark_blocked(comp_l_idx, pad.x_mm, pad.y_mm, pad_radius)
 
     # Gather nets
     net_names = board.get_net_names()
     routed_traces: list[TraceSegment] = []
+    routed_vias: list[Via] = []
 
     for net_name in net_names:
         pads = board.get_pads_for_net(net_name)
         if len(pads) < 2:
             continue
 
-        # Temporarily unblock pads in this net
-        net_cells: list[tuple[int, int]] = []
+        # Convert pads to grid coords
+        net_cells = []
         for pad in pads:
-            gc_p, gr_p = _mm_to_grid(pad.x_mm, pad.y_mm)
-            net_cells.append((gc_p, gr_p))
-            blocked.discard((gc_p, gr_p))
+            # Determine layer
+            l_name = "F.Cu" if "F.Cu" in pad.net_name else "B.Cu" # Simplified
+            # Use comp layer for better accuracy
+            comp = next((c for c in board.components if any(p == pad for p in c.pads)), None)
+            l_name = comp.layer if comp else "F.Cu"
+            
+            cell = _mm_to_grid(l_name, pad.x_mm, pad.y_mm)
+            net_cells.append(cell)
+            blocked.discard(cell)
 
-        # Route star pattern: connect all pads to the first pad
+        # Route star pattern
         start_cell = net_cells[0]
-        layer = pads[0].layer if hasattr(pads[0], 'layer') else "F.Cu"
-        comp_layer = None
-        for comp in board.components:
-            if any(p.component_ref == comp.ref for p in pads):
-                comp_layer = comp.layer
-                break
-        if comp_layer:
-            layer = comp_layer
-
         for i in range(1, len(net_cells)):
-            path = _astar(start_cell, net_cells[i], blocked, cols, rows)
+            path = _astar_3d(start_cell, net_cells[i], blocked, layers_count, cols, rows)
             if path and len(path) >= 2:
-                # Convert path to trace segments
+                # Convert 3D path to traces and vias
                 for j in range(len(path) - 1):
-                    x1, y1 = _grid_to_mm(path[j][0], path[j][1])
-                    x2, y2 = _grid_to_mm(path[j + 1][0], path[j + 1][1])
-                    routed_traces.append(TraceSegment(
-                        start_x=x1, start_y=y1,
-                        end_x=x2, end_y=y2,
-                        width_mm=trace_w,
-                        layer=layer,
-                        net_name=net_name,
-                    ))
-                # Block routed path cells (with trace clearance)
+                    c1 = path[j]
+                    c2 = path[j+1]
+                    
+                    if c1[0] == c2[0]:
+                        # Same layer -> Trace
+                        x1, y1 = _grid_to_mm(c1[0], c1[1], c1[2])
+                        x2, y2 = _grid_to_mm(c2[0], c2[1], c2[2])
+                        routed_traces.append(TraceSegment(
+                            start_x=x1, start_y=y1, end_x=x2, end_y=y2,
+                            width_mm=trace_w, layer="F.Cu" if c1[0]==0 else ("B.Cu" if c1[0]==layers_count-1 else f"In{c1[0]}.Cu"),
+                            net_name=net_name,
+                        ))
+                    else:
+                        # Layer change -> Via
+                        x, y = _grid_to_mm(c1[0], c1[1], c1[2])
+                        routed_vias.append(Via(
+                            net_name=net_name, x_mm=x, y_mm=y,
+                            diameter_mm=board.constraints.via_diameter_mm,
+                            drill_mm=board.constraints.via_drill_mm,
+                        ))
+
+                # Block path
                 for cell in path:
                     r = int(math.ceil((trace_w + clearance) / grid_step))
-                    for di in range(-r, r + 1):
-                        for dj in range(-r, r + 1):
-                            ni, nj = cell[0] + di, cell[1] + dj
-                            if 0 <= ni < cols and 0 <= nj < rows:
-                                blocked.add((ni, nj))
+                    for dl in range(-1, 2): # Via occupancy spans layers
+                        for di in range(-r, r + 1):
+                            for dj in range(-r, r + 1):
+                                nl, ni, nj = cell[0]+dl, cell[1]+di, cell[2]+dj
+                                if 0 <= nl < layers_count and 0 <= ni < cols and 0 <= nj < rows:
+                                    blocked.add((nl, ni, nj))
             else:
-                # Direct connection as fallback (ratsnest style)
-                x1, y1 = _grid_to_mm(start_cell[0], start_cell[1])
-                x2, y2 = _grid_to_mm(net_cells[i][0], net_cells[i][1])
+                # Fallback: direct ratsnest (2D)
+                x1, y1 = _grid_to_mm(start_cell[0], start_cell[1], start_cell[2])
+                x2, y2 = _grid_to_mm(net_cells[i][0], net_cells[i][1], net_cells[i][2])
                 routed_traces.append(TraceSegment(
-                    start_x=x1, start_y=y1,
-                    end_x=x2, end_y=y2,
-                    width_mm=trace_w,
-                    layer=layer,
-                    net_name=net_name,
+                    start_x=x1, start_y=y1, end_x=x2, end_y=y2,
+                    width_mm=trace_w, layer="F.Cu", net_name=net_name, is_ratsnest=True
                 ))
 
-        # Re-block net pad cells for other nets
         for cell in net_cells:
             blocked.add(cell)
 
     board.traces = routed_traces
-    log.info("A* router complete: %d trace segments for %d nets.",
-             len(routed_traces), len(net_names))
+    board.vias.extend(routed_vias)
+    log.info("A* 3D router complete: %d trace segments, %d vias for %d nets.",
+             len(routed_traces), len(routed_vias), len(net_names))
     return board
 
 
-def _astar(
-    start: tuple[int, int],
-    goal: tuple[int, int],
-    blocked: set[tuple[int, int]],
+
+def _astar_3d(
+    start: tuple[int, int, int],
+    goal: tuple[int, int, int],
+    blocked: set[tuple[int, int, int]],
+    layers: int,
     cols: int,
     rows: int,
-) -> list[tuple[int, int]]:
-    """A* pathfinding on a 2D grid.
-
-    Returns a list of (col, row) cells from start to goal, or empty list
-    if no path exists. Uses 8-directional movement.
-    """
+) -> list[tuple[int, int, int]]:
+    """A* pathfinding on a 3D grid (layer, col, row)."""
     if start == goal:
         return [start]
 
-    # Heuristic: Chebyshev distance (since we allow diagonal moves)
-    def h(c: tuple[int, int]) -> float:
-        return max(abs(c[0] - goal[0]), abs(c[1] - goal[1]))
+    def h(c: tuple[int, int, int]) -> float:
+        # 3D Manhattan distance
+        return abs(c[0] - goal[0]) * 2.0 + abs(c[1] - goal[1]) + abs(c[2] - goal[2])
 
-    open_set: list[tuple[float, int, tuple[int, int]]] = []
+    open_set: list[tuple[float, int, tuple[int, int, int]]] = []
     counter = 0
     heapq.heappush(open_set, (h(start), counter, start))
-    came_from: dict[tuple[int, int], tuple[int, int]] = {}
-    g_score: dict[tuple[int, int], float] = {start: 0.0}
+    came_from: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+    g_score: dict[tuple[int, int, int], float] = {start: 0.0}
 
-    SQRT2 = math.sqrt(2)
+    # 6-connectivity: N, S, E, W, Up, Down
     _DIRS = [
-        (1, 0, 1.0), (-1, 0, 1.0), (0, 1, 1.0), (0, -1, 1.0),
-        (1, 1, SQRT2), (-1, 1, SQRT2), (1, -1, SQRT2), (-1, -1, SQRT2),
+        (0, 1, 0, 1.0), (0, -1, 0, 1.0), (0, 0, 1, 1.0), (0, 0, -1, 1.0),
+        (1, 0, 0, 2.0), (-1, 0, 0, 2.0), # layer changes are "more expensive"
     ]
 
-    max_iterations = cols * rows * 2  # safety limit
+    max_iterations = layers * cols * rows * 2
     iterations = 0
 
     while open_set and iterations < max_iterations:
@@ -409,20 +432,20 @@ def _astar(
         _, _, current = heapq.heappop(open_set)
 
         if current == goal:
-            # Reconstruct path
             path = [current]
             while current in came_from:
                 current = came_from[current]
                 path.append(current)
             path.reverse()
-            return _simplify_path(path)
+            return path
 
-        for dc, dr, cost in _DIRS:
-            neighbor = (current[0] + dc, current[1] + dr)
-            if not (0 <= neighbor[0] < cols and 0 <= neighbor[1] < rows):
+        for dl, dc, dr, cost in _DIRS:
+            neighbor = (current[0] + dl, current[1] + dc, current[2] + dr)
+            if not (0 <= neighbor[0] < layers and 0 <= neighbor[1] < cols and 0 <= neighbor[2] < rows):
                 continue
             if neighbor in blocked:
                 continue
+            
             tentative_g = g_score[current] + cost
             if tentative_g < g_score.get(neighbor, float('inf')):
                 came_from[neighbor] = current
@@ -431,7 +454,8 @@ def _astar(
                 counter += 1
                 heapq.heappush(open_set, (f, counter, neighbor))
 
-    return []  # No path found
+    return []
+
 
 
 def _simplify_path(path: list[tuple[int, int]]) -> list[tuple[int, int]]:

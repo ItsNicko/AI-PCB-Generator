@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject, Signal
 _TRANSLATIONS: dict[str, dict[str, str]] = {
     "tr": {
         # ── App / Main Window ──
-        "app_title": "AI PCB Generator",
+        "app_title": "PCB Design Studio",
         "menu_file": "Dosya",
         "menu_edit": "Düzenle",
         "menu_view": "Görünüm",
@@ -37,19 +37,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "status_project_saved": "Proje kaydedildi: {path}",
         "dialog_open_project": "Proje Aç",
         "dialog_save_project": "Proje Kaydet",
-        "file_filter_project": "AI PCB Proje (*.apcb);;JSON (*.json)",
-        "file_filter_apcb": "AI PCB Proje (*.apcb)",
+        "file_filter_project": "PCB Studio Proje (*.apcb);;JSON (*.json)",
+        "file_filter_apcb": "PCB Studio Proje (*.apcb)",
         "dialog_error": "Hata",
         "dialog_warning": "Uyarı",
         "error_load_project": "Proje yüklenemedi:\n{error}",
         "error_save_project": "Kayıt başarısız:\n{error}",
         "warning_no_circuit": "Kaydedilecek bir devre yok.",
         "warning_design_first": "Önce bir devre tasarlayın.",
-        "about_title": "AI PCB Generator Hakkında",
+        "about_title": "PCB Design Studio Hakkında",
         "about_text": (
-            "<h2>AI PCB Generator</h2>"
+            "<h2>PCB Design Studio</h2>"
             "<p>Versiyon 0.1.0</p>"
-            "<p>Doğal dil ile PCB tasarımı yapan AI destekli açık kaynak araç.</p>"
+            "<p>Doğal dil ile PCB tasarımı yapan profesyonel tasarım aracı.</p>"
             "<p>Lisans: MIT</p>"
         ),
 
@@ -62,7 +62,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "3 LED göstergeli ve I2C header'lı sensör kartı tasarla..."
         ),
         "button_design": "⚡ Tasarla",
+        "button_modify": "🛠 Düzenle",
         "button_clear": "Temizle",
+        "mode_new": "✨ Yeni Tasarım",
+        "mode_edit": "🛠 Mevcutu Düzenle",
+        "placeholder_edit": "Mevcut tasarımda yapılacak değişiklikleri tanımlayın (örn. 'LED'e 10k direnç ekle' veya 'Regülatörü 3.3V ile değiştir')...",
         "warning_enter_desc": "⚠ Lütfen bir devre tanımı girin.",
         "status_starting_ai": "AI motoru başlatılıyor...",
         "progress_engine_start": "AI motoru çalışıyor...",
@@ -102,6 +106,31 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "tpl_usbc_desc": (
             "USB-C girişli 5V güç kaynağı kartı. ESD koruması, "
             "polarity koruması, güç LED göstergesi ve 2 adet çıkış headerı."
+        ),
+        "tpl_esp32": "ESP32-S3 Kartı",
+        "tpl_esp32_desc": (
+            "USB-C programlama girişli, 3.3V LDO regülatörlü ve "
+            "GPIO pinleri için breakout header'lı ESP32-S3 taban kartı."
+        ),
+        "tpl_timer": "Zamanlayıcı (555)",
+        "tpl_timer_desc": (
+            "Potansiyometre ile ayarlanabilir frekansta, bir LED'i 1Hz hızında "
+            "yakıp söndüren 555 zamanlayıcı tabanlı astabil multivibratör devresi."
+        ),
+        "tpl_amp": "Ses Amplifikatörü",
+        "tpl_amp_desc": (
+            "LM386 kullanan basit ses amplifikatörü. Ses kontrol potansiyometresi "
+            "ve 8-ohm hoparlör çıkışı içerir."
+        ),
+        "tpl_pdu": "Güç Dağıtım Kartı",
+        "tpl_pdu_desc": (
+            "12V girişli, 5V ve 3.3V çıkışlı sigortalı raylara ve "
+            "güç durum LED'lerine sahip güç dağıtım kartı."
+        ),
+        "tpl_filter": "Aktif Filtre",
+        "tpl_filter_desc": (
+            "Op-amp kullanan aktif alçak geçiren filtre. Ayarlanabilir "
+            "kesim frekansı ve 10k Ohm dirençler içerir."
         ),
 
         # ── Settings Dialog ──
@@ -290,7 +319,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
 
     "en": {
         # ── App / Main Window ──
-        "app_title": "AI PCB Generator",
+        "app_title": "PCB Design Studio",
         "menu_file": "File",
         "menu_edit": "Edit",
         "menu_view": "View",
@@ -320,19 +349,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "status_project_saved": "Project saved: {path}",
         "dialog_open_project": "Open Project",
         "dialog_save_project": "Save Project",
-        "file_filter_project": "AI PCB Project (*.apcb);;JSON (*.json)",
-        "file_filter_apcb": "AI PCB Project (*.apcb)",
+        "file_filter_project": "PCB Studio Project (*.apcb);;JSON (*.json)",
+        "file_filter_apcb": "PCB Studio Project (*.apcb)",
         "dialog_error": "Error",
         "dialog_warning": "Warning",
         "error_load_project": "Failed to load project:\n{error}",
         "error_save_project": "Save failed:\n{error}",
         "warning_no_circuit": "No circuit to save.",
         "warning_design_first": "Design a circuit first.",
-        "about_title": "About AI PCB Generator",
+        "about_title": "About PCB Design Studio",
         "about_text": (
-            "<h2>AI PCB Generator</h2>"
+            "<h2>PCB Design Studio</h2>"
             "<p>Version 0.1.0</p>"
-            "<p>AI-powered open-source tool for PCB design using natural language.</p>"
+            "<p>Professional open-source tool for PCB design using natural language.</p>"
             "<p>License: MIT</p>"
         ),
 
@@ -345,7 +374,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "3.3V LDO regulator, 3 status LEDs and I2C header..."
         ),
         "button_design": "⚡ Design",
+        "button_modify": "🛠 Modify",
         "button_clear": "Clear",
+        "mode_new": "✨ New Design",
+        "mode_edit": "🛠 Edit Existing",
+        "placeholder_edit": "Describe changes to the current design (e.g. 'Add a 10k resistor to the LED' or 'Change the regulator to 3.3V')...",
         "warning_enter_desc": "⚠ Please enter a circuit description.",
         "status_starting_ai": "Starting AI engine...",
         "progress_engine_start": "AI engine running...",
@@ -385,6 +418,31 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "tpl_usbc_desc": (
             "USB-C input 5V power supply board. ESD protection, "
             "polarity protection, power LED indicator and 2 output headers."
+        ),
+        "tpl_esp32": "ESP32-S3 Board",
+        "tpl_esp32_desc": (
+            "ESP32-S3 based development board with USB-C programming, "
+            "3.3V LDO regulator, and breakout headers for GPIOs."
+        ),
+        "tpl_timer": "Timer (555)",
+        "tpl_timer_desc": (
+            "Astable multivibrator using a 555 timer to blink an LED at 1Hz, "
+            "with adjustable frequency via potentiometer."
+        ),
+        "tpl_amp": "Audio Amplifier",
+        "tpl_amp_desc": (
+            "Simple audio amplifier using LM386, with volume control "
+            "potentiometer and 8-ohm speaker output."
+        ),
+        "tpl_pdu": "Power Distribution",
+        "tpl_pdu_desc": (
+            "Power distribution board with 12V input, fused rails for "
+            "5V and 3.3V outputs, and power status LEDs."
+        ),
+        "tpl_filter": "Active Filter",
+        "tpl_filter_desc": (
+            "Active low-pass filter using an op-amp, with adjustable "
+            "cutoff frequency and 10k Ohm resistors."
         ),
 
         # ── Settings Dialog ──

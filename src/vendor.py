@@ -142,9 +142,35 @@ def find_kicad_3dmodels() -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Status summary
-# ---------------------------------------------------------------------------
+def find_footprint_file(footprint_str: str) -> Path | None:
+    """Return path to the .kicad_mod file for a given footprint string.
+    Example: 'Resistor_SMD:R_0805_2012Metric' -> 'Resistor_SMD.pretty/R_0805_2012Metric.kicad_mod'
+    """
+    if not footprint_str or ":" not in footprint_str:
+        return None
+
+    lib_name, fp_name = footprint_str.split(":", 1)
+    rel_path = Path(f"{lib_name}.pretty") / f"{fp_name}.kicad_mod"
+
+    # 1. Check KiCad installation share directory
+    kicad_dir = find_kicad()
+    if kicad_dir:
+        search_path = Path(kicad_dir) / "share" / "kicad" / "footprints" / rel_path
+        if search_path.is_file():
+            return search_path
+
+    # 2. Check common user config directories
+    user_configs = [
+        Path(os.getenv("APPDATA", "")) / "kicad",
+        Path.home() / ".kicad",
+    ]
+    for config_dir in user_configs:
+        search_path = config_dir / "footprints" / rel_path
+        if search_path.is_file():
+            return search_path
+
+    return None
+
 
 def get_tool_status() -> dict[str, dict]:
     """Return detection status for all vendor tools."""
